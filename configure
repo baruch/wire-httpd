@@ -19,7 +19,7 @@ top_targets = []
 
 # Setup environment to rebuild the ninja.build file
 n.variable('configure_args', ' '.join(sys.argv[1:]))
-env_keys = set(['CC', 'AR', 'CFLAGS', 'LDFLAGS'])
+env_keys = set(['CC', 'AR', 'CFLAGS', 'LDFLAGS', 'DEBUG'])
 configure_env = dict((k, os.environ[k]) for k in os.environ if k in env_keys)
 if configure_env:
     config_str = ' '.join([k + '=' + configure_env[k] for k in configure_env])
@@ -67,6 +67,12 @@ cflags = ['-g', '-Wall', '-Wextra', '-Werror', '-Ilibwire/include', '-D_GNU_SOUR
     '-D_FILE_OFFSET_BITS=64', '-I.',
     '-ggdb3', # Let gdb know about macros
     ]
+
+if 'DEBUG' in configure_env:
+    cflags.extend(['-O0'])
+else:
+    cflags.extend(['-O3', '-DNDEBUG=1'])
+
 if 'CFLAGS' in configure_env:
     cflags.append(configure_env['CFLAGS'])
 n.variable('cflags', ' '.join(shell_escape(flag) for flag in cflags))
