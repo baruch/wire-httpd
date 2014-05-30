@@ -284,6 +284,7 @@ static void accept_run(void *arg)
 int main()
 {
 	wire_thread_init(&wire_thread_main);
+	wire_stack_fault_detector_install();
 	wire_fd_init();
 	wire_io_init(32);
 	wire_pool_init(&web_pool, NULL, WEB_POOL_SIZE, DATA_BUF_SIZE + WIRE_DATA_SIZE);
