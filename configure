@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, './ninja')
 
 import ninja_syntax
-from ninja_helpers import shell_escape, cmd_exists
+from ninja_helpers import shell_escape, cmd_exists, cmd_succeeds
 
 BUILD_FILENAME = 'build.ninja'
 buildfile = open(BUILD_FILENAME, 'w')
@@ -105,7 +105,7 @@ n.rule('link',
 n.newline()
 
 # tags
-if cmd_exists('ctags'):
+if cmd_exists('ctags') and cmd_succeeds('ctags -R'):
     n.rule('tags',
             command='ctags -R',
             description='TAGS $out')
