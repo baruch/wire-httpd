@@ -35,3 +35,5 @@ Author
 ------
 
 Baruch Even <baruch@ev-en.org>
+
+  [libwire]: https://github.com/baruch/libwire
