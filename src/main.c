@@ -189,7 +189,6 @@ static void web_run(void *arg)
 	http_parser parser;
 
 	wire_fd_mode_init(&d.fd_state, d.fd);
-	wire_fd_mode_read(&d.fd_state);
 
 	set_nonblock(d.fd);
 
@@ -208,7 +207,9 @@ static void web_run(void *arg)
 			if (errno == EINTR || errno == EAGAIN) {
 				DEBUG("Waiting");
 				/* Nothing received yet, wait for it */
+				wire_fd_mode_read(&d.fd_state);
 				wire_fd_wait(&d.fd_state);
+				wire_fd_mode_none(&d.fd_state);
 				DEBUG("Done waiting");
 				continue;
 			} else {
@@ -234,7 +235,6 @@ static void web_run(void *arg)
 		}
 	} while (1);
 
-	wire_fd_mode_none(&d.fd_state);
 	close(d.fd);
 	DEBUG("Disconnected %d", d.fd);
 }
