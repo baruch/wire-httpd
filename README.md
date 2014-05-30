@@ -3,6 +3,8 @@ wire-httpd
 
 A web server based on [libwire][libwire].
 
+[![Build Status](https://travis-ci.org/baruch/wire-httpd.png?branch=master)](https://travis-ci.org/baruch/wire-httpd)
+
 Why?
 ----
 
