@@ -209,7 +209,6 @@ static void web_run(void *arg)
 				/* Nothing received yet, wait for it */
 				wire_fd_mode_read(&d.fd_state);
 				wire_fd_wait(&d.fd_state);
-				wire_fd_mode_none(&d.fd_state);
 				DEBUG("Done waiting");
 				continue;
 			} else {
@@ -217,6 +216,8 @@ static void web_run(void *arg)
 				break;
 			}
 		}
+
+		wire_fd_mode_none(&d.fd_state);
 
 		DEBUG("Processing %d", (int)received);
 		size_t processed = http_parser_execute(&parser, &parser_settings, buf, received);
