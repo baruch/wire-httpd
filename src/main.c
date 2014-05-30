@@ -29,7 +29,8 @@
 // DATA_BUF_SIZE is for the data to be read from the filesystem, leave a little
 // space since the rounding up to 4K is the stack space for the rest of the
 // wire data structures
-#define DATA_BUF_SIZE 254*1024
+#define DATA_BUF_SIZE 64*1024
+#define WIRE_DATA_SIZE 8*1024
 
 static wire_thread_t wire_thread_main;
 static wire_t wire_accept;
@@ -284,7 +285,7 @@ int main()
 	wire_thread_init(&wire_thread_main);
 	wire_fd_init();
 	wire_io_init(32);
-	wire_pool_init(&web_pool, NULL, WEB_POOL_SIZE, DATA_BUF_SIZE);
+	wire_pool_init(&web_pool, NULL, WEB_POOL_SIZE, DATA_BUF_SIZE + WIRE_DATA_SIZE);
 	wire_init(&wire_accept, "accept", accept_run, NULL, WIRE_STACK_ALLOC(4096));
 	wire_thread_run();
 	return 0;
