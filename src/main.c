@@ -2,6 +2,7 @@
 #include "wire_fd.h"
 #include "wire_pool.h"
 #include "wire_stack.h"
+#include "wire_io.h"
 #include "macros.h"
 #include "http_parser.h"
 
@@ -24,6 +25,11 @@
 #endif
 
 #define WEB_POOL_SIZE 128
+
+// DATA_BUF_SIZE is for the data to be read from the filesystem, leave a little
+// space since the rounding up to 4K is the stack space for the rest of the
+// wire data structures
+#define DATA_BUF_SIZE 254*1024
 
 static wire_thread_t wire_thread_main;
 static wire_t wire_accept;
@@ -87,20 +93,81 @@ static int buf_write(wire_fd_state_t *fd_state, const char *buf, int len)
 	} while (1);
 }
 
+static void error_generic(struct web_data *d, int code, const char *code_str, const char *body, int body_len)
+{
+	char buf[4096];
+	int buf_len = snprintf(buf, sizeof(buf), "HTTP/1.1 %d %s\r\nContent-Length: %u\r\nConnection:close\r\n\r\n",
+			code, code_str, body_len);
+
+	if (buf_write(&d->fd_state, buf, buf_len) < 0)
+		return;
+
+	if (body_len > 0)
+		buf_write(&d->fd_state, body, body_len);
+}
+
+static void error_not_found(struct web_data *d)
+{
+	error_generic(d, 404, "Not Found", NULL, 0);
+}
+
+#define ERROR_INTERNAL(d, msg) error_internal(d, msg, strlen(msg))
+static void error_internal(struct web_data *d, const char *msg, int msg_len)
+{
+	error_generic(d, 500, "Internal Failure", msg, msg_len);
+}
+
 static int on_message_complete(http_parser *parser)
 {
 	DEBUG("message complete");
 	struct web_data *d = parser->data;
-	char buf[512];
-	char data[512] = "Test\r\n";
-	snprintf(buf, sizeof(buf), "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n%s\r\n",
-			(int)strlen(data),
-			!http_should_keep_alive(parser) ? "Connection: close\r\n" : "");
-	if (buf_write(&d->fd_state, buf, strlen(buf)) < 0)
-		return -1;
-	if (buf_write(&d->fd_state, data, strlen(data)) < 0)
-		return -1;
+	int ret;
+	const char *filename = "README.md";
 
+	int fd = wio_open(filename, O_RDONLY, 0);
+	if (fd < 0) {
+		error_not_found(d);
+		return -1;
+	}
+
+	struct stat stbuf;
+	ret = wio_fstat(fd, &stbuf);
+	if (ret < 0) {
+		ERROR_INTERNAL(d, "Error getting info on file");
+		goto Exit;
+	}
+
+	char buf[512];
+	int buf_len = snprintf(buf, sizeof(buf), "HTTP/1.1 200 OK\r\nContent-Length: %u\r\n%s\r\n",
+			(unsigned)stbuf.st_size,
+			!http_should_keep_alive(parser) ? "Connection: close\r\n" : "");
+	if (buf_len > (int)sizeof(buf)) {
+		ERROR_INTERNAL(d, "Failed to prepare header buffer");
+		goto Exit;
+	}
+	if (buf_write(&d->fd_state, buf, buf_len) < 0)
+		goto Exit;
+
+	off_t offset = 0;
+	char data[DATA_BUF_SIZE];
+
+	while (offset < stbuf.st_size) {
+		off_t count = stbuf.st_size - offset;
+		if (count > DATA_BUF_SIZE)
+			count = DATA_BUF_SIZE;
+		ret = wio_pread(fd, data, count, offset);
+		if (ret <= 0) {
+			xlog("Error while reading file %s, ret=%d errno=%d: %m", filename, ret, errno);
+			goto Exit;
+		}
+		offset += ret;
+
+		if (buf_write(&d->fd_state, data, ret) < 0)
+			goto Exit;
+	}
+
+Exit:
+	wio_close(fd);
 	return -1;
 }
 
@@ -268,7 +335,8 @@ int main()
 {
 	wire_thread_init(&wire_thread_main);
 	wire_fd_init();
-	wire_pool_init(&web_pool, NULL, WEB_POOL_SIZE, 16*1024);
+	wire_io_init(32);
+	wire_pool_init(&web_pool, NULL, WEB_POOL_SIZE, DATA_BUF_SIZE);
 	wire_init(&wire_accept, "accept", accept_run, NULL, WIRE_STACK_ALLOC(4096));
 	wire_thread_run();
 	return 0;
