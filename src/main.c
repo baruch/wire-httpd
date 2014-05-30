@@ -92,12 +92,14 @@ static void error_generic(struct web_data *d, int code, const char *code_str, co
 		buf_write(&d->fd_state, body, body_len);
 }
 
+static void error_not_found(struct web_data *d) __attribute__((noinline));
 static void error_not_found(struct web_data *d)
 {
 	error_generic(d, 404, "Not Found", NULL, 0);
 }
 
 #define ERROR_INTERNAL(d, msg) error_internal(d, msg, strlen(msg))
+static void error_internal(struct web_data *d, const char *msg, int msg_len) __attribute__((noinline));
 static void error_internal(struct web_data *d, const char *msg, int msg_len)
 {
 	error_generic(d, 500, "Internal Failure", msg, msg_len);
@@ -123,19 +125,18 @@ static int on_message_complete(http_parser *parser)
 		goto Exit;
 	}
 
-	char buf[512];
-	int buf_len = snprintf(buf, sizeof(buf), "HTTP/1.1 200 OK\r\nContent-Length: %u\r\n%s\r\n",
+	char data[DATA_BUF_SIZE];
+	int buf_len = snprintf(data, sizeof(data), "HTTP/1.1 200 OK\r\nContent-Length: %u\r\n%s\r\n",
 			(unsigned)stbuf.st_size,
 			!http_should_keep_alive(parser) ? "Connection: close\r\n" : "");
-	if (buf_len > (int)sizeof(buf)) {
+	if (buf_len > (int)sizeof(data)) {
 		ERROR_INTERNAL(d, "Failed to prepare header buffer");
 		goto Exit;
 	}
-	if (buf_write(&d->fd_state, buf, buf_len) < 0)
+	if (buf_write(&d->fd_state, data, buf_len) < 0)
 		goto Exit;
 
 	off_t offset = 0;
-	char data[DATA_BUF_SIZE];
 
 	while (offset < stbuf.st_size) {
 		off_t count = stbuf.st_size - offset;
