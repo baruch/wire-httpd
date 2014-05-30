@@ -113,7 +113,7 @@ for l in ('libwire',):
     clibs += lib
 
 # wire-httpd app
-c_files = c_files_list('src')
+c_files = c_files_list('src') + ['libwire/test/utils.c']
 base_objs = c_to_o([c_file for c_file in c_files if not c_file.endswith('main.c')])
 main_obj = c_to_o([c_file for c_file in c_files if c_file.endswith('main.c')])
 o_files = main_obj + base_objs
