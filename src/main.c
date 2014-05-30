@@ -145,7 +145,7 @@ static int on_message_complete(http_parser *parser)
 	DEBUG("message complete");
 	struct web_data *d = parser->data;
 	int ret;
-	const char *filename = "README.md";
+	const char *filename = d->url+1;
 
 	int fd = wio_open(filename, O_RDONLY, 0);
 	if (fd < 0) {
