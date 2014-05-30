@@ -32,6 +32,7 @@ static wire_pool_t web_pool;
 struct web_data {
 	int fd;
 	wire_fd_state_t fd_state;
+	char url[255];
 };
 
 static void xlog(const char *fmt, ...)
@@ -98,14 +99,25 @@ static int on_message_complete(http_parser *parser)
 	return -1;
 }
 
-#if 0
 static int on_url(http_parser *parser, const char *at, size_t length)
 {
 	UNUSED(parser);
 	DEBUG("URL: %.*s", (int)length, at);
+	struct web_data *d = parser->data;
+
+	if (length > sizeof(d->url)) {
+		xlog("Error while handling url, it's length is %u and the max length is %u", length, sizeof(d->url));
+		// TODO: Instead of shutting down the connection, need to manage a way to report an error to the client
+		return -1;
+	}
+
+	memcpy(d->url, at, length);
+	d->url[length] = 0;
+
 	return 0;
 }
 
+#if 0
 static int on_status(http_parser *parser, const char *at, size_t length)
 {
 	UNUSED(parser);
@@ -140,7 +152,7 @@ static const struct http_parser_settings parser_settings = {
 	//.on_headers_complete = on_headers_complete,
 	.on_message_complete = on_message_complete,
 
-	//.on_url = on_url,
+	.on_url = on_url,
 	//.on_status = on_status,
 	//.on_header_field = on_header_field,
 	//.on_header_value = on_header_value,
