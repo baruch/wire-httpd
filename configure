@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, './ninja')
 
 import ninja_syntax
-from ninja_helpers import shell_escape
+from ninja_helpers import shell_escape, cmd_exists
 
 BUILD_FILENAME = 'build.ninja'
 buildfile = open(BUILD_FILENAME, 'w')
@@ -103,6 +103,14 @@ n.rule('link',
         description='LINK $out'
 )
 n.newline()
+
+# tags
+if cmd_exists('ctags'):
+    n.rule('tags',
+            command='ctags -R',
+            description='TAGS $out')
+    tags = n.build('tags', 'tags', implicit=c_files_list('src') + c_files_list('libwire/src'))
+    top_targets += tags
 
 # C libs
 n.rule('build.ninja',
