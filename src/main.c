@@ -53,21 +53,6 @@ static void xlog(const char *fmt, ...)
 	puts(msg);
 }
 
-#if 0
-static int on_message_begin(http_parser *parser)
-{
-	UNUSED(parser);
-	DEBUG("Message begin");
-	return 0;
-}
-
-static int on_headers_complete(http_parser *parser)
-{
-	DEBUG("Headers complete: HTTP/%d.%d %s", parser->http_major, parser->http_minor, http_method_str(parser->method));
-	return 0;
-}
-#endif
-
 static int buf_write(wire_fd_state_t *fd_state, const char *buf, int len)
 {
 	int sent = 0;
@@ -189,46 +174,9 @@ static int on_url(http_parser *parser, const char *at, size_t length)
 	return 0;
 }
 
-#if 0
-static int on_status(http_parser *parser, const char *at, size_t length)
-{
-	UNUSED(parser);
-	DEBUG("STATUS: %.*s", (int)length, at);
-	return 0;
-}
-
-static int on_header_field(http_parser *parser, const char *at, size_t length)
-{
-	UNUSED(parser);
-	DEBUG("HEADER FIELD: %.*s", (int)length, at);
-	return 0;
-}
-
-static int on_header_value(http_parser *parser, const char *at, size_t length)
-{
-	UNUSED(parser);
-	DEBUG("HEADER VALUE: %.*s", (int)length, at);
-	return 0;
-}
-
-static int on_body(http_parser *parser, const char *at, size_t length)
-{
-	UNUSED(parser);
-	DEBUG("BODY: %.*s", (int)length, at);
-	return 0;
-}
-#endif
-
 static const struct http_parser_settings parser_settings = {
-	//.on_message_begin = on_message_begin,
-	//.on_headers_complete = on_headers_complete,
 	.on_message_complete = on_message_complete,
-
 	.on_url = on_url,
-	//.on_status = on_status,
-	//.on_header_field = on_header_field,
-	//.on_header_value = on_header_value,
-	//.on_body = on_body,
 };
 
 static void web_run(void *arg)
