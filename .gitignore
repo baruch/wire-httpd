@@ -3,3 +3,4 @@
 wire-httpd
 build
 build.ninja
+.gdb_history
