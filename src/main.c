@@ -75,12 +75,15 @@ static int buf_write(wire_fd_state_t *fd_state, const char *buf, int len)
 				return 0;
 		} else {
 			// Error
-			if (errno != EINTR && errno != EAGAIN)
+			if (errno == EINTR || errno == EAGAIN) {
+				wire_fd_mode_write(fd_state);
+				wire_fd_wait(fd_state);
+				wire_fd_mode_none(fd_state);
+			} else {
+				xlog("Error while writing into socket %d: %m", fd_state->fd);
 				return -1;
+			}
 		}
-
-		wire_fd_mode_write(fd_state);
-		wire_fd_wait(fd_state);
 	} while (1);
 }
 
@@ -93,8 +96,10 @@ static int on_message_complete(http_parser *parser)
 	snprintf(buf, sizeof(buf), "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n%s\r\n",
 			(int)strlen(data),
 			!http_should_keep_alive(parser) ? "Connection: close\r\n" : "");
-	buf_write(&d->fd_state, buf, strlen(buf));
-	buf_write(&d->fd_state, data, strlen(data));
+	if (buf_write(&d->fd_state, buf, strlen(buf)) < 0)
+		return -1;
+	if (buf_write(&d->fd_state, data, strlen(data)) < 0)
+		return -1;
 
 	return -1;
 }
