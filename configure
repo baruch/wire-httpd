@@ -64,7 +64,7 @@ n.variable('ar', configure_env.get('AR', 'ar'))
 n.variable('builddir', 'build')
 
 cflags = ['-g', '-Wall', '-Wextra', '-Werror', '-Ilibwire/include', '-D_GNU_SOURCE',
-    '-D_FILE_OFFSET_BITS=64', '-I.',
+    '-D_FILE_OFFSET_BITS=64', '-I.', '-D_FORTIFY_SOURCE=2',
     '-ggdb3', # Let gdb know about macros
     ]
 
