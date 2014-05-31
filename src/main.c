@@ -19,6 +19,7 @@
 #include <sys/timerfd.h>
 
 #include "libwire/test/utils.h"
+#include "gperf.h"
 
 #ifdef NDEBUG
 #define DEBUG(fmt, ...)
@@ -129,6 +130,27 @@ static int buf_write(wire_fd_state_t *fd_state, const char *buf, int len)
 	} while (1);
 }
 
+static const char *content_type_from_filename(const char *filename)
+{
+	const char *last_dot = NULL;
+	int len = 0;
+
+	for (; *filename; filename++, len++) {
+		switch (*filename) {
+			case '.': last_dot = filename; len = 0; break;
+			case '/': last_dot = NULL; break;
+		}
+	}
+
+	if (last_dot == NULL)
+		return "text/plain";
+
+	const char *suffix = mime_from_suffix_name(last_dot+1, len-1);
+	if (suffix)
+		return suffix;
+	return "application/binary";
+}
+
 static void error_generic(struct web_data *d, int code, const char *code_str, const char *body, int body_len)
 {
 	char buf[4096];
@@ -162,7 +184,9 @@ static void send_file(int fd, off_t file_size, http_parser *parser, const char *
 	struct web_data *d = parser->data;
 	int ret;
 	char data[DATA_BUF_SIZE];
-	int buf_len = snprintf(data, sizeof(data), "HTTP/1.1 200 OK\r\nContent-Length: %u\r\n%s\r\n",
+	const char *content_type = content_type_from_filename(filename);
+	int buf_len = snprintf(data, sizeof(data), "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %u\r\n%s\r\n",
+			content_type,
 			(unsigned)file_size,
 			!http_should_keep_alive(parser) ? "Connection: close\r\n" : "");
 	if (buf_len > (int)sizeof(data)) {

@@ -37,6 +37,8 @@ def built(filename):
     return os.path.join('$builddir', filename)
 def c2obj(filename):
     return os.path.splitext(filename)[0] + '.o'
+def x2c(filename):
+    return os.path.splitext(filename)[0] + '.c'
 
 def flatten(l):
     nl = []
@@ -64,7 +66,7 @@ n.variable('ar', configure_env.get('AR', 'ar'))
 n.variable('builddir', 'build')
 
 cflags = ['-g', '-Wall', '-Wextra', '-Werror', '-Ilibwire/include', '-D_GNU_SOURCE',
-    '-D_FILE_OFFSET_BITS=64', '-I.', '-D_FORTIFY_SOURCE=2',
+    '-D_FILE_OFFSET_BITS=64', '-I.', '-D_FORTIFY_SOURCE=2', '-Isrc',
     '-ggdb3', # Let gdb know about macros
     ]
 
@@ -104,6 +106,12 @@ n.rule('link',
 )
 n.newline()
 
+n.rule('gperf',
+        command='gperf -N mime_entry_from_suffix_name -o -t -C -m1000 -F ",(void*)0" $in > $out',
+        description='GPERF $out'
+)
+n.newline()
+
 # tags
 if cmd_exists('ctags') and cmd_succeeds('ctags -R'):
     n.rule('tags',
@@ -127,7 +135,10 @@ for l in ('libwire',):
     clibs += lib
 
 # wire-httpd app
-c_files = c_files_list('src') + ['libwire/test/utils.c']
+gperf_out = []
+for gperf_file in ('src/suffix_mime.gperf',):
+    gperf_out += n.build(built(x2c(gperf_file)), 'gperf', gperf_file)
+c_files = c_files_list('src') + ['libwire/test/utils.c'] + gperf_out
 base_objs = c_to_o([c_file for c_file in c_files if not c_file.endswith('main.c')])
 main_obj = c_to_o([c_file for c_file in c_files if c_file.endswith('main.c')])
 o_files = main_obj + base_objs

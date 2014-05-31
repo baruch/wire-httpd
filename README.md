@@ -15,11 +15,11 @@ performance for libwire.
 Build
 -----
 
-To build you need to have ninja-build installed:
+To build you need to have ninja-build and gperf installed:
 
 Debian/Ubuntu:
 
-    sudo apt-get install ninja-build
+    sudo apt-get install ninja-build gperf
 
 Run:
 

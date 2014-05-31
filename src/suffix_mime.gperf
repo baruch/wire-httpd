@@ -1,0 +1,58 @@
+%{
+#include <string.h>
+#include "gperf.h"
+%}
+struct suffix_entry { const char *name; const char *mime; };
+%%
+js, "text/javascript"
+html, "text/html"
+htm, "text/html"
+txt, "text/plain"
+text, "text/plain"
+md, "text/plain"
+ps, "text/postscript"
+atom, "application/atom+xml"
+gzip, "application/gzip"
+jar, "application/java-archive"
+json, "application/json"
+doc, "application/msword"
+pdf, "application/pdf"
+rtf, "application/rtf"
+xhtml, "application/xhtml+xml"
+xht, "application/xhtml+xml"
+xml, "application/xml"
+xsd, "application/xml"
+xslt, "application/xslt+xml"
+xsl, "application/xslt+xml"
+zip, "application/zip"
+apk, "application/vnd.android.package-archive"
+kml, "application/vnd.google-earth.kml+xml"
+kmz, "application/vnd.google-earth.kmz"
+xls, "application/vnd.ms-excel"
+xlb, "application/vnd.ms-excel"
+xlt, "application/vnd.ms-excel"
+ppt, "application/vnd.ms-powerpoint"
+pps, "application/vnd.ms-powerpoint"
+pcap, "application/vnd.tcpdump.pcap"
+cap, "application/vnd.tcpdump.pcap"
+torrent, "application/x-bittorrent"
+deb, "application/x-debian-package"
+udeb, "application/x-debian-package"
+jnlp, "application/x-java-jnlp-file"
+mp3, "audio/mpeg"
+wav, "audio/x-wav"
+gif, "image/gif"
+jpeg, "image/jpeg"
+jpg, "image/jpeg"
+png, "image/png"
+tiff, "image/tiff"
+css, "text/css"
+csv, "text/csv"
+%%
+const char *mime_from_suffix_name(const char *suffix, int len)
+{
+        const struct suffix_entry *entry = mime_entry_from_suffix_name(suffix, len);
+        if (entry)
+                return entry->mime;
+        return NULL;
+}
