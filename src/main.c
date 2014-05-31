@@ -15,6 +15,8 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <stdarg.h>
+#include <stdbool.h>
+#include <sys/timerfd.h>
 
 #include "libwire/test/utils.h"
 
@@ -42,6 +44,11 @@ struct web_data {
 	char url[255];
 };
 
+typedef struct wire_timer {
+	int timerfd;
+	wire_fd_state_t fd_state;
+} wire_timer_t;
+
 static void xlog(const char *fmt, ...)
 {
 	char msg[256];
@@ -52,6 +59,49 @@ static void xlog(const char *fmt, ...)
 	va_end(ap);
 
 	puts(msg);
+}
+
+static bool timer_start(wire_timer_t *timer, int msecs)
+{
+	int fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC|TFD_NONBLOCK);
+	if (fd < 0) {
+		perror("Failed to create a timerfd");
+		return false;
+	}
+
+	struct itimerspec timer_val = {
+		.it_value = { .tv_sec = msecs / 1000, .tv_nsec = (msecs % 1000) * 1000000}
+	};
+
+	int ret = timerfd_settime(fd, 0, &timer_val, NULL);
+	if (ret < 0) {
+		perror("Failed to set time on timerfd");
+		close(fd);
+		return false;
+	}
+
+	timer->timerfd = fd;
+
+	wire_fd_mode_init(&timer->fd_state, fd);
+	wire_fd_mode_read(&timer->fd_state);
+
+	return true;
+}
+
+static void timer_stop(wire_timer_t *timer)
+{
+	wire_fd_mode_none(&timer->fd_state);
+	close(timer->timerfd);
+}
+
+static bool timer_triggered(wire_timer_t *timer)
+{
+	return timer->fd_state.wait.triggered;
+}
+
+static void timer_list_chain(wire_timer_t *timer, wire_wait_list_t *list)
+{
+	wire_fd_wait_list_chain(list, &timer->fd_state);
 }
 
 static int buf_write(wire_fd_state_t *fd_state, const char *buf, int len)
@@ -196,6 +246,7 @@ static void web_run(void *arg)
 		.fd = (long int)arg,
 	};
 	http_parser parser;
+	wire_timer_t timer;
 
 	wire_fd_mode_init(&d.fd_state, d.fd);
 
@@ -206,6 +257,7 @@ static void web_run(void *arg)
 
 	char buf[4096];
 	do {
+		timer_start(&timer, 10*1000);
 		buf[0] = 0;
 		int received = read(d.fd, buf, sizeof(buf));
 		DEBUG("Received: %d %d", received, errno);
@@ -217,15 +269,23 @@ static void web_run(void *arg)
 				DEBUG("Waiting");
 				/* Nothing received yet, wait for it */
 				wire_fd_mode_read(&d.fd_state);
-				wire_fd_wait(&d.fd_state);
+
+				wire_wait_list_t wait_list;
+				wire_wait_list_init(&wait_list);
+				wire_fd_wait_list_chain(&wait_list, &d.fd_state);
+				timer_list_chain(&timer, &wait_list);
+				wire_list_wait(&wait_list);
+
 				DEBUG("Done waiting");
-				continue;
+				if (!timer_triggered(&timer))
+					continue;
 			} else {
 				DEBUG("Error receiving from socket %d: %m", d.fd);
 				break;
 			}
 		}
 
+		timer_stop(&timer);
 		wire_fd_mode_none(&d.fd_state);
 
 		DEBUG("Processing %d", (int)received);
