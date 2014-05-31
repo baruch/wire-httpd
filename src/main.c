@@ -245,19 +245,20 @@ static int on_message_complete(http_parser *parser)
 	struct web_data *d = parser->data;
 	const char *filename = d->url+1;
 	off_t buf_len;
-	const char *buf = cache_get(filename, &buf_len);
+	void *release_data;
+	const char *buf = cache_get(filename, &buf_len, &release_data);
 
 	if (buf) {
 		// File in cache, send from buffer
 		send_cached_file(parser, filename, buf, buf_len);
-		cache_release(filename);
+		cache_release(release_data);
 	} else {
 		int fd;
 		buf = cache_insert(filename, &buf_len, &fd);
 		if (buf) {
 			// Inserted into cache
 			send_cached_file(parser, filename, buf, buf_len);
-			cache_release(filename);
+			cache_release(release_data);
 		} else if (fd >= 0){
 			// No space in cache or file too large
 			send_file(fd, buf_len, parser, filename);
