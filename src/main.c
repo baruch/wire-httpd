@@ -132,7 +132,7 @@ static int buf_write(wire_fd_state_t *fd_state, const char *buf, int len)
 static void error_generic(struct web_data *d, int code, const char *code_str, const char *body, int body_len)
 {
 	char buf[4096];
-	int buf_len = snprintf(buf, sizeof(buf), "HTTP/1.1 %d %s\r\nContent-Length: %u\r\nConnection:close\r\n\r\n",
+	int buf_len = snprintf(buf, sizeof(buf), "HTTP/1.1 %d %s\r\nContent-Type: text/plain\r\nContent-Length: %u\r\nConnection:close\r\n\r\n",
 			code, code_str, body_len);
 
 	if (buf_write(&d->fd_state, buf, buf_len) < 0)
