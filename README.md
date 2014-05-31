@@ -23,6 +23,7 @@ Debian/Ubuntu:
 
 Run:
 
+    git submodule update
     ./configure
     ninja
 
