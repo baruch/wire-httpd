@@ -225,7 +225,7 @@ static int on_url(http_parser *parser, const char *at, size_t length)
 
 	if (length > sizeof(d->url)) {
 		xlog("Error while handling url, it's length is %u and the max length is %u", length, sizeof(d->url));
-		// TODO: Instead of shutting down the connection, need to manage a way to report an error to the client
+		error_internal(d, STR_WITH_LEN("url too long\n"));
 		return -1;
 	}
 
