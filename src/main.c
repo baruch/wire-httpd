@@ -256,8 +256,13 @@ static void web_run(void *arg)
 	parser.data = &d;
 
 	char buf[4096];
+	bool bail_out = false;
+	bool timer_stopped = true;
 	do {
-		timer_start(&timer, 10*1000);
+		if (timer_stopped) {
+			timer_start(&timer, 10*1000);
+			timer_stopped = false;
+		}
 		buf[0] = 0;
 		int received = read(d.fd, buf, sizeof(buf));
 		DEBUG("Received: %d %d", received, errno);
@@ -281,12 +286,16 @@ static void web_run(void *arg)
 					continue;
 			} else {
 				DEBUG("Error receiving from socket %d: %m", d.fd);
-				break;
+				bail_out = true;
 			}
 		}
 
 		timer_stop(&timer);
+		timer_stopped = true;
 		wire_fd_mode_none(&d.fd_state);
+
+		if (bail_out)
+			break;
 
 		DEBUG("Processing %d", (int)received);
 		size_t processed = http_parser_execute(&parser, &parser_settings, buf, received);
