@@ -1,3 +1,5 @@
+#include "cache.h"
+
 #include "wire.h"
 #include "wire_fd.h"
 #include "wire_pool.h"
@@ -33,7 +35,7 @@
 // space since the rounding up to 4K is the stack space for the rest of the
 // wire data structures
 #define DATA_BUF_SIZE 64*1024
-#define WIRE_DATA_SIZE 8*1024
+#define WIRE_DATA_SIZE 16*1024
 
 static wire_thread_t wire_thread_main;
 static wire_t wire_accept;
@@ -178,22 +180,33 @@ static void error_internal(struct web_data *d, const char *msg, int msg_len)
 	error_generic(d, 500, "Internal Failure", msg, msg_len);
 }
 
-static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename) __attribute__((noinline));
-static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename)
+static bool send_header(http_parser *parser, const char *filename, off_t file_size) __attribute__((noinline));
+static bool send_header(http_parser *parser, const char *filename, off_t file_size)
 {
+	char data[2048];
 	struct web_data *d = parser->data;
-	int ret;
-	char data[DATA_BUF_SIZE];
-	const char *content_type = content_type_from_filename(filename);
-	int buf_len = snprintf(data, sizeof(data), "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %u\r\n%s\r\n",
-			content_type,
+	int buf_len;
+
+	buf_len = snprintf(data, sizeof(data), "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %u\r\n%s\r\n",
+			content_type_from_filename(filename),
 			(unsigned)file_size,
 			!http_should_keep_alive(parser) ? "Connection: close\r\n" : "");
 	if (buf_len > (int)sizeof(data)) {
 		error_internal(d, STR_WITH_LEN("Failed to prepare header buffer"));
-		return;
+		return false;
 	}
 	if (buf_write(&d->fd_state, data, buf_len) < 0)
+		return false;
+	return true;
+}
+
+static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename) __attribute__((noinline));
+static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename)
+{
+	struct web_data *d = parser->data;
+	char data[DATA_BUF_SIZE];
+
+	if (!send_header(parser, filename, file_size))
 		return;
 
 	off_t offset = 0;
@@ -202,7 +215,7 @@ static void send_file(int fd, off_t file_size, http_parser *parser, const char *
 		off_t count = file_size - offset;
 		if (count > DATA_BUF_SIZE)
 			count = DATA_BUF_SIZE;
-		ret = wio_pread(fd, data, count, offset);
+		int ret = wio_pread(fd, data, count, offset);
 		if (ret <= 0) {
 			xlog("Error while reading file %s, ret=%d errno=%d: %m", filename, ret, errno);
 			return;
@@ -214,30 +227,50 @@ static void send_file(int fd, off_t file_size, http_parser *parser, const char *
 	}
 }
 
+static void send_cached_file(http_parser *parser, const char *filename, const char *buf, off_t buf_len) __attribute__((noinline));
+static void send_cached_file(http_parser *parser, const char *filename, const char *buf, off_t buf_len)
+{
+	struct web_data *d = parser->data;
+
+	if (!send_header(parser, filename, buf_len))
+		return;
+
+	if (buf_write(&d->fd_state, buf, buf_len) < 0)
+		return;
+}
+
 static int on_message_complete(http_parser *parser)
 {
 	DEBUG("message complete");
 	struct web_data *d = parser->data;
-	int ret;
 	const char *filename = d->url+1;
+	off_t buf_len;
+	const char *buf = cache_get(filename, &buf_len);
 
-	int fd = wio_open(filename, O_RDONLY, 0);
-	if (fd < 0) {
-		error_not_found(d);
-		return -1;
+	if (buf) {
+		// File in cache, send from buffer
+		send_cached_file(parser, filename, buf, buf_len);
+		cache_release(filename);
+	} else {
+		int fd;
+		buf = cache_insert(filename, &buf_len, &fd);
+		if (buf) {
+			// Inserted into cache
+			send_cached_file(parser, filename, buf, buf_len);
+			cache_release(filename);
+		} else if (fd >= 0){
+			// No space in cache or file too large
+			send_file(fd, buf_len, parser, filename);
+			wio_close(fd); // TODO: To reduce latency we can skip the wait on this call, we only want the side effect but not the result
+		} else {
+			switch (fd) {
+				case -2: error_not_found(d); break;
+				case -3: error_internal(d, STR_WITH_LEN("Error getting info on file\n")); break;
+				default: error_internal(d, STR_WITH_LEN("Unknown internal error\n")); break;
+			}
+		}
 	}
 
-	struct stat stbuf;
-	ret = wio_fstat(fd, &stbuf);
-	if (ret < 0) {
-		error_internal(d, STR_WITH_LEN("Error getting info on file\n"));
-		goto Exit;
-	}
-
-	send_file(fd, stbuf.st_size, parser, filename);
-
-Exit:
-	wio_close(fd);
 	return -1;
 }
 
@@ -391,6 +424,7 @@ int main()
 	wire_fd_init();
 	wire_io_init(32);
 	wire_pool_init(&web_pool, NULL, WEB_POOL_SIZE, DATA_BUF_SIZE + WIRE_DATA_SIZE);
+	cache_init();
 	wire_init(&wire_accept, "accept", accept_run, NULL, WIRE_STACK_ALLOC(4096));
 	wire_thread_run();
 	return 0;
