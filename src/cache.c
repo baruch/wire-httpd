@@ -34,11 +34,11 @@ const char *cache_get(const char *filename, off_t *file_size, void **data)
 	for (i = 0; i < last_cache_item; i++) {
 		struct cache_item *item = &cache[i];
 		if (strcmp(filename, item->filename) == 0) {
-			// TODO: Handle cache hit
+			// Cache hit
 			*file_size = item->stbuf.st_size;
 			*data = item->buf;
 			item->buf->ref_cnt++;
-			return NULL;
+			return item->buf->buf;
 		}
 	}
 
