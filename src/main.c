@@ -1,4 +1,5 @@
 #include "cache.h"
+#include "xlog.h"
 
 #include "wire.h"
 #include "wire_fd.h"
@@ -16,7 +17,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
-#include <stdarg.h>
 #include <stdbool.h>
 #include <sys/timerfd.h>
 
@@ -51,18 +51,6 @@ typedef struct wire_timer {
 	int timerfd;
 	wire_fd_state_t fd_state;
 } wire_timer_t;
-
-static void xlog(const char *fmt, ...)
-{
-	char msg[256];
-	va_list ap;
-
-	va_start(ap, fmt);
-	vsnprintf(msg, sizeof(msg), fmt, ap);
-	va_end(ap);
-
-	puts(msg);
-}
 
 static bool timer_start(wire_timer_t *timer, int msecs)
 {
@@ -254,7 +242,7 @@ static int on_message_complete(http_parser *parser)
 		cache_release(release_data);
 	} else {
 		int fd;
-		buf = cache_insert(filename, &buf_len, &fd);
+		buf = cache_insert(filename, &buf_len, &fd, &release_data);
 		if (buf) {
 			// Inserted into cache
 			send_cached_file(parser, filename, buf, buf_len);
