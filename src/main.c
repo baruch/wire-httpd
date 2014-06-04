@@ -234,29 +234,23 @@ static int on_message_complete(http_parser *parser)
 	const char *filename = d->url+1;
 	off_t buf_len;
 	void *release_data;
-	const char *buf = cache_get(filename, &buf_len, &release_data);
+	int fd;
+	const char *buf = cache_get(filename, &buf_len, &fd, &release_data);
 
 	if (buf) {
 		// File in cache, send from buffer
 		send_cached_file(parser, filename, buf, buf_len);
 		cache_release(release_data);
+	} else if (fd >= 0){
+		// No space in cache or file too large, need to send it directly, it's already open
+		send_file(fd, buf_len, parser, filename);
+		wio_close(fd); // TODO: To reduce latency we can skip the wait on this call, we only want the side effect but not the result
 	} else {
-		int fd;
-		buf = cache_insert(filename, &buf_len, &fd, &release_data);
-		if (buf) {
-			// Inserted into cache
-			send_cached_file(parser, filename, buf, buf_len);
-			cache_release(release_data);
-		} else if (fd >= 0){
-			// No space in cache or file too large
-			send_file(fd, buf_len, parser, filename);
-			wio_close(fd); // TODO: To reduce latency we can skip the wait on this call, we only want the side effect but not the result
-		} else {
-			switch (fd) {
-				case -2: error_not_found(d); break;
-				case -3: error_internal(d, STR_WITH_LEN("Error getting info on file\n")); break;
-				default: error_internal(d, STR_WITH_LEN("Unknown internal error\n")); break;
-			}
+		// File is missing or some other error when opening/reading
+		switch (fd) {
+			case -2: error_not_found(d); break;
+			case -3: error_internal(d, STR_WITH_LEN("Error getting info on file\n")); break;
+			default: error_internal(d, STR_WITH_LEN("Unknown internal error\n")); break;
 		}
 	}
 
