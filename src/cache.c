@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <time.h>
+#include <assert.h>
 
 #define CACHE_SIZE 256
 #define SPARE_BUFFERS 64
@@ -101,6 +102,7 @@ static struct cache_item *cache_item_alloc(const char *filename)
 	memset(item, 0, sizeof(*item));
 	strcpy(item->filename, filename);
 	list_head_init(&item->wakeup_list);
+	item->refresh_counter = refresh_counter-1;
 	return item;
 }
 
@@ -109,11 +111,13 @@ static int open_file(const char *filename, struct stat *stbuf)
 	int fd = wio_open(filename, O_RDONLY, 0);
 	if (fd < 0) {
 		// File not found
+		DEBUG("Failed to open file %s: %m", filename);
 		return -2;
 	}
 
 	int ret = wio_fstat(fd, stbuf);
 	if (ret < 0) {
+		DEBUG("Failed to fstat file %s: %m", filename);
 		wio_close(fd);
 		return -3;
 	}
@@ -121,7 +125,16 @@ static int open_file(const char *filename, struct stat *stbuf)
 	return fd;
 }
 
-static bool cache_load(struct cache_item *item, off_t *file_size, int *pfd)
+static bool stbuf_eq(struct stat *b1, struct stat *b2)
+{
+	return b1->st_dev == b2->st_dev &&
+		   b1->st_ino == b2->st_ino &&
+		   b1->st_size == b2->st_size &&
+		   b1->st_mtime == b2->st_mtime &&
+		   b1->st_ctime == b2->st_ctime;
+}
+
+static bool cache_load(struct cache_item *item, struct buf_item *old_buf, off_t *file_size, int *pfd)
 {
 	struct stat stbuf;
 	int fd = open_file(item->filename, &stbuf);
@@ -133,12 +146,30 @@ static bool cache_load(struct cache_item *item, off_t *file_size, int *pfd)
 
 	*file_size = stbuf.st_size;
 
-	if (stbuf.st_size > BUFFER_SIZE)
+	if (stbuf.st_size > BUFFER_SIZE) {
+		DEBUG("File %s too large (%u)", item->filename, stbuf.st_size);
 		return false;
+	}
+
+	// The file wasn't changed, don't waste time loading the new content
+	if (old_buf && stbuf_eq(&stbuf, &item->stbuf)) {
+		DEBUG("No need to reload data, nothing changed in file %s", item->filename);
+		item->buf = old_buf;
+		return true;
+	}
 
 	// Insert into cache
 	item->stbuf = stbuf;
-	struct buf_item *buf = alloc_buf();
+	struct buf_item *buf;
+	if (old_buf && old_buf->ref_cnt == 1) {
+		// Reuse old buf
+		DEBUG("Reuse old buf as it is not being served currently");
+		buf = old_buf;
+	} else {
+		DEBUG("New buf allocated in place of old one");
+		free_buf(old_buf);
+		buf = alloc_buf();
+	}
 	int ret = wio_pread(fd, buf->buf, stbuf.st_size, 0);
 
 	if (ret < stbuf.st_size) {
@@ -148,9 +179,9 @@ static bool cache_load(struct cache_item *item, off_t *file_size, int *pfd)
 	}
 
 	// Load succeeded, give the buffer
+	DEBUG("File successfully loaded %s", item->filename);
 	item->refresh_counter = refresh_counter;
 	item->buf = buf;
-	item->buf->ref_cnt++;
 	return true;
 }
 
@@ -185,12 +216,13 @@ const char *cache_get(const char *filename, off_t *file_size, int *pfd, void **d
 
 	if (item->refresh_counter != refresh_counter) {
 		// Need to refresh the buffer, everyone else should wait as well
-		free_buf(item->buf);
+		xlog("Trying to reload file %s", filename);
+		struct buf_item *old_buf = item->buf;
 		item->buf = NULL;
 		item->refresh_counter = refresh_counter;
 
 		// Refresh content
-		bool loaded = cache_load(item, file_size, pfd);
+		bool loaded = cache_load(item, old_buf, file_size, pfd);
 
 		// Wakeup the waiters
 		struct list_head *head;
@@ -205,6 +237,14 @@ const char *cache_get(const char *filename, off_t *file_size, int *pfd, void **d
 			free_cache_item(item);
 			return NULL;
 		}
+
+		// Cache was loaded, close the fd
+		if (*pfd >= 0) {
+			wio_close(*pfd);
+			*pfd = -1;
+		}
+
+		assert(item->buf);
 	}
 
 	if (item->buf == NULL) {
