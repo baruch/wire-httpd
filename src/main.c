@@ -37,6 +37,7 @@ static wire_pool_t web_pool;
 
 struct web_data {
 	int fd;
+	bool should_close;
 	wire_fd_state_t fd_state;
 	char url[255];
 };
@@ -169,7 +170,18 @@ static bool send_header(http_parser *parser, const char *filename, off_t file_si
 	struct web_data *d = parser->data;
 	int buf_len;
 
-	buf_len = snprintf(data, sizeof(data), "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %u\r\n%s\r\n",
+	int http_major = 1;
+	int http_minor = 1;
+
+	if (http_major > parser->http_major) {
+		http_major = parser->http_major;
+		http_minor = parser->http_minor;
+	} else if (http_major == parser->http_major && http_minor > parser->http_minor) {
+		http_minor = parser->http_minor;
+	}
+
+	buf_len = snprintf(data, sizeof(data), "HTTP/%d.%d 200 OK\r\nContent-Type: %s\r\nContent-Length: %u\r\n%s\r\n",
+			http_major, http_minor,
 			content_type_from_filename(filename),
 			(unsigned)file_size,
 			!http_should_keep_alive(parser) ? "Connection: close\r\n" : "");
@@ -247,6 +259,9 @@ static int on_message_complete(http_parser *parser)
 			default: error_internal(d, STR_WITH_LEN("Unknown internal error\n")); break;
 		}
 	}
+
+	if (!http_should_keep_alive(parser))
+		d->should_close = true;
 
 	return -1;
 }
@@ -344,6 +359,9 @@ static void web_run(void *arg)
 		} else if (processed != (size_t)received) {
 			// Error in parsing
 			xlog("Not everything was parsed, error is likely, bailing out.");
+			break;
+		} else if (d.should_close) {
+			DEBUG("Closing as requested");
 			break;
 		}
 	} while (1);
