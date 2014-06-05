@@ -23,12 +23,6 @@
 #include "libwire/test/utils.h"
 #include "gperf.h"
 
-#ifdef NDEBUG
-#define DEBUG(fmt, ...)
-#else
-#define DEBUG(fmt, ...) xlog(fmt, ## __VA_ARGS__)
-#endif
-
 #define WEB_POOL_SIZE 128
 
 // DATA_BUF_SIZE is for the data to be read from the filesystem, leave a little
