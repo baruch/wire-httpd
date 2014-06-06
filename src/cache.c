@@ -11,6 +11,10 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <assert.h>
+#include <sys/timerfd.h>
+#include <stdio.h>
+#include <errno.h>
+#include <stdint.h>
 
 #define CACHE_SIZE 256
 #define SPARE_BUFFERS 64
@@ -277,11 +281,40 @@ static void cache_refresh_timer(void *arg)
 {
 	(void)arg;
 
-	while (1) {
-		refresh_counter++;
-		// TODO: Use a periodic timerfd instead of restarting one from scratch each time
-		wire_fd_wait_msec(30*1000);
+	int fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC|TFD_NONBLOCK);
+	if (fd < 0) {
+		perror("Failed to create a timerfd");
+		return;
 	}
+
+	struct itimerspec timer;
+	timer.it_value.tv_sec = timer.it_interval.tv_sec = 30;
+	timer.it_value.tv_nsec = timer.it_interval.tv_nsec = 0;
+
+	int ret = timerfd_settime(fd, 0, &timer, NULL);
+
+	wire_fd_state_t fd_state;
+	wire_fd_mode_init(&fd_state, fd);
+	wire_fd_mode_read(&fd_state);
+
+	while (1) {
+		wire_fd_wait(&fd_state);
+
+		uint64_t timer_val = 0;
+		ret = read(fd, &timer_val, sizeof(timer_val));
+		if (ret < (int)sizeof(timer_val)) {
+			if (errno == EAGAIN)
+				continue;
+			perror("Error reading from timerfd");
+			break;
+		}
+
+		refresh_counter++;
+	}
+
+	wire_fd_mode_none(&fd_state);
+	close(fd);
+	xlog("Cache refresh timer exited");
 }
 
 void cache_init(void)
