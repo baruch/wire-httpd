@@ -12,6 +12,8 @@
 #include <time.h>
 #include <assert.h>
 #include <sys/timerfd.h>
+#include <sys/signalfd.h>
+#include <signal.h>
 #include <stdio.h>
 #include <errno.h>
 #include <stdint.h>
@@ -277,14 +279,12 @@ void cache_release(void *data)
 	buf->ref_cnt--;
 }
 
-static void cache_refresh_timer(void *arg)
+static int timer_setup(void)
 {
-	(void)arg;
-
 	int fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC|TFD_NONBLOCK);
 	if (fd < 0) {
 		perror("Failed to create a timerfd");
-		return;
+		return -1;
 	}
 
 	struct itimerspec timer;
@@ -292,28 +292,98 @@ static void cache_refresh_timer(void *arg)
 	timer.it_value.tv_nsec = timer.it_interval.tv_nsec = 0;
 
 	int ret = timerfd_settime(fd, 0, &timer, NULL);
-
-	wire_fd_state_t fd_state;
-	wire_fd_mode_init(&fd_state, fd);
-	wire_fd_mode_read(&fd_state);
-
-	while (1) {
-		wire_fd_wait(&fd_state);
-
-		uint64_t timer_val = 0;
-		ret = read(fd, &timer_val, sizeof(timer_val));
-		if (ret < (int)sizeof(timer_val)) {
-			if (errno == EAGAIN)
-				continue;
-			perror("Error reading from timerfd");
-			break;
-		}
-
-		refresh_counter++;
+	if (ret < 0) {
+		xlog("Error while setting the timerfd: %m");
+		close(fd);
+		return -1;
 	}
 
-	wire_fd_mode_none(&fd_state);
-	close(fd);
+	return fd;
+}
+
+static int signal_setup(void)
+{
+	sigset_t sigset;
+
+	sigemptyset(&sigset);
+	sigaddset(&sigset, SIGUSR1);
+	sigaddset(&sigset, SIGUSR2);
+
+	int ret = pthread_sigmask(SIG_BLOCK, &sigset, NULL);
+	if (ret < 0)
+		xlog("Failed to block signals: %m");
+
+	int fd = signalfd(-1, &sigset, SFD_NONBLOCK|SFD_CLOEXEC);
+	if (fd < 0)
+		xlog("Failed to create a signalfd: %m");
+
+	return fd;
+}
+
+static void cache_refresh_timer(void *arg)
+{
+	(void)arg;
+
+	int tfd = timer_setup();
+	int sfd = signal_setup();
+	if (tfd < 0 || sfd < 0) {
+		xlog("Failed to start the cache refresh timer");
+		return;
+	}
+
+	wire_fd_state_t tfd_state;
+	wire_fd_mode_init(&tfd_state, tfd);
+	wire_fd_mode_read(&tfd_state);
+
+	wire_fd_state_t sfd_state;
+	wire_fd_mode_init(&sfd_state, sfd);
+	wire_fd_mode_read(&sfd_state);
+
+	wire_wait_list_t wait_list;
+	wire_wait_list_init(&wait_list);
+	wire_fd_wait_list_chain(&wait_list, &tfd_state);
+	wire_fd_wait_list_chain(&wait_list, &sfd_state);
+
+	while (1) {
+		wire_list_wait(&wait_list);
+
+		if (tfd_state.wait.triggered) {
+			wire_wait_reset(&tfd_state.wait);
+
+			uint64_t timer_val = 0;
+			int ret = read(tfd, &timer_val, sizeof(timer_val));
+			if (ret < 0) {
+				if (errno != EAGAIN) {
+					perror("Error reading from timerfd");
+					break;
+				}
+			} else {
+				refresh_counter++;
+			}
+		}
+
+		if (sfd_state.wait.triggered) {
+			wire_wait_reset(&sfd_state.wait);
+
+			struct signalfd_siginfo siginfo;
+			int ret = read(sfd, &siginfo, sizeof(siginfo));
+			if (ret < 0) {
+				if (errno != EAGAIN) {
+					xlog("Error reading from signalfd: %m");
+					break;
+				}
+			} else {
+				xlog("Refresh counter increased by signal");
+				refresh_counter++;
+			}
+		}
+	}
+
+	wire_fd_mode_none(&tfd_state);
+	wio_close(tfd);
+
+	wire_fd_mode_none(&sfd_state);
+	wio_close(sfd);
 	xlog("Cache refresh timer exited");
 }
 
