@@ -202,13 +202,16 @@ static bool send_header(http_parser *parser, const char *filename, off_t file_si
 	return true;
 }
 
-static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename) __attribute__((noinline));
-static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename)
+static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename, bool only_head) __attribute__((noinline));
+static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename, bool only_head)
 {
 	struct web_data *d = parser->data;
 	char data[DATA_BUF_SIZE];
 
 	if (!send_header(parser, filename, file_size))
+		return;
+
+	if (only_head)
 		return;
 
 	off_t offset = 0;
@@ -229,12 +232,15 @@ static void send_file(int fd, off_t file_size, http_parser *parser, const char *
 	}
 }
 
-static void send_cached_file(http_parser *parser, const char *filename, const char *buf, off_t buf_len) __attribute__((noinline));
-static void send_cached_file(http_parser *parser, const char *filename, const char *buf, off_t buf_len)
+static void send_cached_file(http_parser *parser, const char *filename, const char *buf, off_t buf_len, bool only_head) __attribute__((noinline));
+static void send_cached_file(http_parser *parser, const char *filename, const char *buf, off_t buf_len, bool only_head)
 {
 	struct web_data *d = parser->data;
 
 	if (!send_header(parser, filename, buf_len))
+		return;
+
+	if (only_head)
 		return;
 
 	if (buf_write(&d->fd_state, buf, buf_len) < 0)
@@ -250,20 +256,22 @@ static int on_message_complete(http_parser *parser)
 	void *release_data;
 	int fd;
 
-	if (parser->method != HTTP_GET) {
+	if (parser->method != HTTP_GET && parser->method != HTTP_HEAD) {
 		error_invalid(d);
 		return -1;
 	}
+
+	bool only_head = parser->method == HTTP_HEAD;
 
 	const char *buf = cache_get(filename, &buf_len, &fd, &release_data);
 
 	if (buf) {
 		// File in cache, send from buffer
-		send_cached_file(parser, filename, buf, buf_len);
+		send_cached_file(parser, filename, buf, buf_len, only_head);
 		cache_release(release_data);
 	} else if (fd >= 0){
 		// No space in cache or file too large, need to send it directly, it's already open
-		send_file(fd, buf_len, parser, filename);
+		send_file(fd, buf_len, parser, filename, only_head);
 		wio_close(fd);
 	} else {
 		// File is missing or some other error when opening/reading
