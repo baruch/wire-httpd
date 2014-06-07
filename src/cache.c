@@ -31,6 +31,7 @@ struct buf_item {
 struct cache_item {
 	unsigned refresh_counter;
 	char filename[255];
+	char last_modified[32];
 	struct stat stbuf;
 	struct buf_item *buf;
 	struct list_head wakeup_list;
@@ -140,6 +141,13 @@ static bool stbuf_eq(struct stat *b1, struct stat *b2)
 		   b1->st_ctime == b2->st_ctime;
 }
 
+static void calc_last_modified(char *str, int str_len, uint32_t mtime)
+{
+	time_t t = mtime;
+	struct tm *tmp = gmtime(&t);
+	strftime(str, str_len, "%a, %d %b %Y %H:%M:%S %Z", tmp);
+}
+
 static bool cache_load(struct cache_item *item, struct buf_item *old_buf, off_t *file_size, int *pfd)
 {
 	struct stat stbuf;
@@ -188,6 +196,7 @@ static bool cache_load(struct cache_item *item, struct buf_item *old_buf, off_t 
 	DEBUG("File successfully loaded %s", item->filename);
 	item->refresh_counter = refresh_counter;
 	item->buf = buf;
+	calc_last_modified(item->last_modified, sizeof(item->last_modified), item->stbuf.st_mtime);
 	return true;
 }
 
@@ -205,7 +214,7 @@ static struct cache_item *cache_find(const char *filename)
 	return NULL;
 }
 
-const char *cache_get(const char *filename, off_t *file_size, uint32_t *last_modified, int *pfd, void **data)
+const char *cache_get(const char *filename, off_t *file_size, char *last_modified, int *pfd, void **data)
 {
 	struct cache_item *item = cache_find(filename);
 	if (!item)
@@ -217,7 +226,7 @@ const char *cache_get(const char *filename, off_t *file_size, uint32_t *last_mod
 		*pfd = open_file(filename, &stbuf);
 		if (*pfd >= 0) {
 			*file_size = stbuf.st_size;
-			*last_modified = stbuf.st_mtime;
+			calc_last_modified(last_modified, 32, stbuf.st_mtime);
 		}
 		return NULL;
 	}
@@ -270,7 +279,7 @@ const char *cache_get(const char *filename, off_t *file_size, uint32_t *last_mod
 
 	// Cache hit
 	*file_size = item->stbuf.st_size;
-	*last_modified = item->stbuf.st_mtime;
+	strcpy(last_modified, item->last_modified);
 	*data = item->buf;
 	item->buf->ref_cnt++;
 	return item->buf->buf;

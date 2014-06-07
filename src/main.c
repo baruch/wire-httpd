@@ -25,6 +25,7 @@
 #include "gperf.h"
 
 #define INDEX_FILE_NAME "index.html"
+#define IF_MODIFIED_SINCE_HDR "If-Modified-Since"
 #define WEB_POOL_SIZE 128
 
 // DATA_BUF_SIZE is for the data to be read from the filesystem, leave a little
@@ -40,6 +41,8 @@ static wire_pool_t web_pool;
 struct web_data {
 	int fd;
 	bool should_close;
+	bool next_hdr_val_if_modified_since;
+	char if_modified_since[32];
 	wire_fd_state_t fd_state;
 	char url[255];
 };
@@ -173,10 +176,9 @@ static void error_invalid(struct web_data *d)
 	error_generic(d, 405, "Internal Method", STR_WITH_LEN("Invalid method used"));
 }
 
-static bool send_header(http_parser *parser, const char *filename, off_t file_size, uint32_t last_modified) __attribute__((noinline));
-static bool send_header(http_parser *parser, const char *filename, off_t file_size, uint32_t last_modified)
+static bool send_header(http_parser *parser, int code, const char *code_msg, const char *filename, off_t file_size, const char *last_modified) __attribute__((noinline));
+static bool send_header(http_parser *parser, int code, const char *code_msg, const char *filename, off_t file_size, const char *last_modified)
 {
-	char last_modified_str[64];
 	char data[2048];
 	struct web_data *d = parser->data;
 	int buf_len;
@@ -191,21 +193,18 @@ static bool send_header(http_parser *parser, const char *filename, off_t file_si
 		http_minor = parser->http_minor;
 	}
 
-	time_t t = last_modified;
-	struct tm *tmp = gmtime(&t);
-	strftime(last_modified_str, sizeof(last_modified_str), "Last-Modified: %a, %d %b %Y %H:%M:%S %Z\r\n", tmp);
-
-	buf_len = snprintf(data, sizeof(data), "HTTP/%d.%d 200 OK\r\n"
+	buf_len = snprintf(data, sizeof(data), "HTTP/%d.%d %d %s\r\n"
 	                                       "Content-Type: %s\r\n"
 	                                       "Content-Length: %u\r\n"
 	                                       "Cache-Control: max_age=3600\r\n"
-	                                       "%s"
+	                                       "Last-Modified: %s\r\n"
 	                                       "%s"
 	                                       "\r\n",
 			http_major, http_minor,
+			code, code_msg,
 			content_type_from_filename(filename),
 			(unsigned)file_size,
-			last_modified_str,
+			last_modified,
 			!http_should_keep_alive(parser) ? "Connection: close\r\n" : "");
 	if (buf_len > (int)sizeof(data)) {
 		error_internal(d, STR_WITH_LEN("Failed to prepare header buffer"));
@@ -216,13 +215,23 @@ static bool send_header(http_parser *parser, const char *filename, off_t file_si
 	return true;
 }
 
-static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename, uint32_t last_modified, bool only_head) __attribute__((noinline));
-static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename, uint32_t last_modified, bool only_head)
+static bool send_header_ok(http_parser *parser, const char *filename, off_t file_size, const char *last_modified)
+{
+	return send_header(parser, 200, "OK", filename, file_size, last_modified);
+}
+
+static bool send_header_unmodified(http_parser *parser, const char *filename, off_t file_size, const char *last_modified)
+{
+	return send_header(parser, 304, "Not Modified", filename, file_size, last_modified);
+}
+
+static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename, const char *last_modified, bool only_head) __attribute__((noinline));
+static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename, const char *last_modified, bool only_head)
 {
 	struct web_data *d = parser->data;
 	char data[DATA_BUF_SIZE];
 
-	if (!send_header(parser, filename, file_size, last_modified))
+	if (!send_header_ok(parser, filename, file_size, last_modified))
 		return;
 
 	if (only_head)
@@ -246,12 +255,12 @@ static void send_file(int fd, off_t file_size, http_parser *parser, const char *
 	}
 }
 
-static void send_cached_file(http_parser *parser, const char *filename, uint32_t last_modified, const char *buf, off_t buf_len, bool only_head) __attribute__((noinline));
-static void send_cached_file(http_parser *parser, const char *filename, uint32_t last_modified, const char *buf, off_t buf_len, bool only_head)
+static void send_cached_file(http_parser *parser, const char *filename, const char *last_modified, const char *buf, off_t buf_len, bool only_head) __attribute__((noinline));
+static void send_cached_file(http_parser *parser, const char *filename, const char *last_modified, const char *buf, off_t buf_len, bool only_head)
 {
 	struct web_data *d = parser->data;
 
-	if (!send_header(parser, filename, buf_len, last_modified))
+	if (!send_header_ok(parser, filename, buf_len, last_modified))
 		return;
 
 	if (only_head)
@@ -267,9 +276,12 @@ static int on_message_complete(http_parser *parser)
 	struct web_data *d = parser->data;
 	const char *filename = d->url+1;
 	off_t buf_len;
-	uint32_t last_modified;
+	char last_modified[32];
 	void *release_data;
 	int fd;
+
+	if (!http_should_keep_alive(parser))
+		d->should_close = true;
 
 	if (parser->method != HTTP_GET && parser->method != HTTP_HEAD) {
 		error_invalid(d);
@@ -278,7 +290,19 @@ static int on_message_complete(http_parser *parser)
 
 	bool only_head = parser->method == HTTP_HEAD;
 
-	const char *buf = cache_get(filename, &buf_len, &last_modified, &fd, &release_data);
+	const char *buf = cache_get(filename, &buf_len, last_modified, &fd, &release_data);
+
+	DEBUG("If modified since is '%s' last modified is '%s'", d->if_modified_since, last_modified);
+	if (d->if_modified_since[0] && strcmp(d->if_modified_since, last_modified) == 0) {
+		DEBUG("Not modified");
+		if (fd >= 0)
+			wio_close(fd);
+		if (!send_header_unmodified(parser, filename, buf_len, last_modified)) {
+			d->should_close = true;
+			return -1;
+		}
+		return 0;
+	}
 
 	if (buf) {
 		// File in cache, send from buffer
@@ -296,9 +320,6 @@ static int on_message_complete(http_parser *parser)
 			default: error_internal(d, STR_WITH_LEN("Unknown internal error\n")); break;
 		}
 	}
-
-	if (!http_should_keep_alive(parser))
-		d->should_close = true;
 
 	return -1;
 }
@@ -335,9 +356,43 @@ static int on_url(http_parser *parser, const char *at, size_t length)
 	return 0;
 }
 
+static int on_header_field(http_parser *parser, const char *at, size_t length)
+{
+	struct web_data *d = parser->data;
+	if (length == strlen(IF_MODIFIED_SINCE_HDR) && memcmp(at, IF_MODIFIED_SINCE_HDR, strlen(IF_MODIFIED_SINCE_HDR)) == 0) {
+		d->next_hdr_val_if_modified_since = true;
+		DEBUG("Got If-Modified-Since header");
+	} else {
+		d->next_hdr_val_if_modified_since = false;
+	}
+	return 0;
+}
+
+static int on_header_value(http_parser *parser, const char *at, size_t length)
+{
+	struct web_data *d = parser->data;
+	if (d->next_hdr_val_if_modified_since) {
+		DEBUG("Parsing If-Modified-Since string '%.*s'", length, at);
+
+		int cur_len = strlen(d->if_modified_since);
+		if (cur_len + length > sizeof(d->if_modified_since) - 1) {
+			d->if_modified_since[0] = 0;
+			d->next_hdr_val_if_modified_since = false;
+			DEBUG("Too long if-modified-since header, ignoring it");
+		} else {
+			memcpy(d->if_modified_since + cur_len, at, length);
+			d->if_modified_since[cur_len + length] = 0;
+			DEBUG("If-Modified-Since is now %.*s", cur_len + length, d->if_modified_since);
+		}
+	}
+	return 0;
+}
+
 static const struct http_parser_settings parser_settings = {
 	.on_message_complete = on_message_complete,
 	.on_url = on_url,
+	.on_header_field = on_header_field,
+	.on_header_value = on_header_value,
 };
 
 static void web_run(void *arg)
