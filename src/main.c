@@ -19,6 +19,7 @@
 #include <netinet/ip.h>
 #include <stdbool.h>
 #include <sys/timerfd.h>
+#include <time.h>
 
 #include "libwire/test/utils.h"
 #include "gperf.h"
@@ -171,9 +172,10 @@ static void error_invalid(struct web_data *d)
 	error_generic(d, 405, "Internal Method", STR_WITH_LEN("Invalid method used"));
 }
 
-static bool send_header(http_parser *parser, const char *filename, off_t file_size) __attribute__((noinline));
-static bool send_header(http_parser *parser, const char *filename, off_t file_size)
+static bool send_header(http_parser *parser, const char *filename, off_t file_size, uint32_t last_modified) __attribute__((noinline));
+static bool send_header(http_parser *parser, const char *filename, off_t file_size, uint32_t last_modified)
 {
+	char last_modified_str[64];
 	char data[2048];
 	struct web_data *d = parser->data;
 	int buf_len;
@@ -188,10 +190,21 @@ static bool send_header(http_parser *parser, const char *filename, off_t file_si
 		http_minor = parser->http_minor;
 	}
 
-	buf_len = snprintf(data, sizeof(data), "HTTP/%d.%d 200 OK\r\nContent-Type: %s\r\nContent-Length: %u\r\nCache-Control: max_age=3600\r\n%s\r\n",
+	time_t t = last_modified;
+	struct tm *tmp = gmtime(&t);
+	strftime(last_modified_str, sizeof(last_modified_str), "Last-Modified: %a, %d %b %Y %H:%M:%S %Z\r\n", tmp);
+
+	buf_len = snprintf(data, sizeof(data), "HTTP/%d.%d 200 OK\r\n"
+	                                       "Content-Type: %s\r\n"
+	                                       "Content-Length: %u\r\n"
+	                                       "Cache-Control: max_age=3600\r\n"
+	                                       "%s"
+	                                       "%s"
+	                                       "\r\n",
 			http_major, http_minor,
 			content_type_from_filename(filename),
 			(unsigned)file_size,
+			last_modified_str,
 			!http_should_keep_alive(parser) ? "Connection: close\r\n" : "");
 	if (buf_len > (int)sizeof(data)) {
 		error_internal(d, STR_WITH_LEN("Failed to prepare header buffer"));
@@ -202,13 +215,13 @@ static bool send_header(http_parser *parser, const char *filename, off_t file_si
 	return true;
 }
 
-static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename, bool only_head) __attribute__((noinline));
-static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename, bool only_head)
+static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename, uint32_t last_modified, bool only_head) __attribute__((noinline));
+static void send_file(int fd, off_t file_size, http_parser *parser, const char *filename, uint32_t last_modified, bool only_head)
 {
 	struct web_data *d = parser->data;
 	char data[DATA_BUF_SIZE];
 
-	if (!send_header(parser, filename, file_size))
+	if (!send_header(parser, filename, file_size, last_modified))
 		return;
 
 	if (only_head)
@@ -232,12 +245,12 @@ static void send_file(int fd, off_t file_size, http_parser *parser, const char *
 	}
 }
 
-static void send_cached_file(http_parser *parser, const char *filename, const char *buf, off_t buf_len, bool only_head) __attribute__((noinline));
-static void send_cached_file(http_parser *parser, const char *filename, const char *buf, off_t buf_len, bool only_head)
+static void send_cached_file(http_parser *parser, const char *filename, uint32_t last_modified, const char *buf, off_t buf_len, bool only_head) __attribute__((noinline));
+static void send_cached_file(http_parser *parser, const char *filename, uint32_t last_modified, const char *buf, off_t buf_len, bool only_head)
 {
 	struct web_data *d = parser->data;
 
-	if (!send_header(parser, filename, buf_len))
+	if (!send_header(parser, filename, buf_len, last_modified))
 		return;
 
 	if (only_head)
@@ -253,6 +266,7 @@ static int on_message_complete(http_parser *parser)
 	struct web_data *d = parser->data;
 	const char *filename = d->url+1;
 	off_t buf_len;
+	uint32_t last_modified;
 	void *release_data;
 	int fd;
 
@@ -263,15 +277,15 @@ static int on_message_complete(http_parser *parser)
 
 	bool only_head = parser->method == HTTP_HEAD;
 
-	const char *buf = cache_get(filename, &buf_len, &fd, &release_data);
+	const char *buf = cache_get(filename, &buf_len, &last_modified, &fd, &release_data);
 
 	if (buf) {
 		// File in cache, send from buffer
-		send_cached_file(parser, filename, buf, buf_len, only_head);
+		send_cached_file(parser, filename, last_modified, buf, buf_len, only_head);
 		cache_release(release_data);
 	} else if (fd >= 0){
 		// No space in cache or file too large, need to send it directly, it's already open
-		send_file(fd, buf_len, parser, filename, only_head);
+		send_file(fd, buf_len, parser, filename, last_modified, only_head);
 		wio_close(fd);
 	} else {
 		// File is missing or some other error when opening/reading

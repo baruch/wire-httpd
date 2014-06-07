@@ -205,7 +205,7 @@ static struct cache_item *cache_find(const char *filename)
 	return NULL;
 }
 
-const char *cache_get(const char *filename, off_t *file_size, int *pfd, void **data)
+const char *cache_get(const char *filename, off_t *file_size, uint32_t *last_modified, int *pfd, void **data)
 {
 	struct cache_item *item = cache_find(filename);
 	if (!item)
@@ -215,8 +215,10 @@ const char *cache_get(const char *filename, off_t *file_size, int *pfd, void **d
 		// No place in cache for this file
 		struct stat stbuf;
 		*pfd = open_file(filename, &stbuf);
-		if (*pfd >= 0)
+		if (*pfd >= 0) {
 			*file_size = stbuf.st_size;
+			*last_modified = stbuf.st_mtime;
+		}
 		return NULL;
 	}
 
@@ -268,6 +270,7 @@ const char *cache_get(const char *filename, off_t *file_size, int *pfd, void **d
 
 	// Cache hit
 	*file_size = item->stbuf.st_size;
+	*last_modified = item->stbuf.st_mtime;
 	*data = item->buf;
 	item->buf->ref_cnt++;
 	return item->buf->buf;
