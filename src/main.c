@@ -250,7 +250,7 @@ static int on_message_complete(http_parser *parser)
 	} else if (fd >= 0){
 		// No space in cache or file too large, need to send it directly, it's already open
 		send_file(fd, buf_len, parser, filename);
-		wio_close(fd); // TODO: To reduce latency we can skip the wait on this call, we only want the side effect but not the result
+		wio_close(fd);
 	} else {
 		// File is missing or some other error when opening/reading
 		switch (fd) {
