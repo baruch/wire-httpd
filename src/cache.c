@@ -303,17 +303,17 @@ static int timer_setup(void)
 
 static int signal_setup(void)
 {
-	sigset_t sigset;
+	sigset_t sig_set;
 
-	sigemptyset(&sigset);
-	sigaddset(&sigset, SIGUSR1);
-	sigaddset(&sigset, SIGUSR2);
+	sigemptyset(&sig_set);
+	sigaddset(&sig_set, SIGUSR1);
+	sigaddset(&sig_set, SIGUSR2);
 
-	int ret = pthread_sigmask(SIG_BLOCK, &sigset, NULL);
+	int ret = pthread_sigmask(SIG_BLOCK, &sig_set, NULL);
 	if (ret < 0)
 		xlog("Failed to block signals: %m");
 
-	int fd = signalfd(-1, &sigset, SFD_NONBLOCK|SFD_CLOEXEC);
+	int fd = signalfd(-1, &sig_set, SFD_NONBLOCK|SFD_CLOEXEC);
 	if (fd < 0)
 		xlog("Failed to create a signalfd: %m");
 
