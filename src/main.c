@@ -188,7 +188,7 @@ static bool send_header(http_parser *parser, const char *filename, off_t file_si
 		http_minor = parser->http_minor;
 	}
 
-	buf_len = snprintf(data, sizeof(data), "HTTP/%d.%d 200 OK\r\nContent-Type: %s\r\nContent-Length: %u\r\n%s\r\n",
+	buf_len = snprintf(data, sizeof(data), "HTTP/%d.%d 200 OK\r\nContent-Type: %s\r\nContent-Length: %u\r\nCache-Control: max_age=3600\r\n%s\r\n",
 			http_major, http_minor,
 			content_type_from_filename(filename),
 			(unsigned)file_size,
