@@ -136,11 +136,14 @@ static const char *content_type_from_filename(const char *filename)
 	return "application/binary";
 }
 
+static void error_generic(struct web_data *d, int code, const char *code_str, const char *body, int body_len) __attribute__((noinline));
 static void error_generic(struct web_data *d, int code, const char *code_str, const char *body, int body_len)
 {
 	char buf[4096];
 	int buf_len = snprintf(buf, sizeof(buf), "HTTP/1.1 %d %s\r\nContent-Type: text/plain\r\nContent-Length: %u\r\nConnection:close\r\n\r\n",
 			code, code_str, body_len);
+
+	d->should_close = true;
 
 	if (buf_write(&d->fd_state, buf, buf_len) < 0)
 		return;
@@ -161,6 +164,11 @@ static void error_internal(struct web_data *d, const char *msg, int msg_len) __a
 static void error_internal(struct web_data *d, const char *msg, int msg_len)
 {
 	error_generic(d, 500, "Internal Failure", msg, msg_len);
+}
+
+static void error_invalid(struct web_data *d)
+{
+	error_generic(d, 405, "Internal Method", STR_WITH_LEN("Invalid method used"));
 }
 
 static bool send_header(http_parser *parser, const char *filename, off_t file_size) __attribute__((noinline));
@@ -241,6 +249,12 @@ static int on_message_complete(http_parser *parser)
 	off_t buf_len;
 	void *release_data;
 	int fd;
+
+	if (parser->method != HTTP_GET) {
+		error_invalid(d);
+		return -1;
+	}
+
 	const char *buf = cache_get(filename, &buf_len, &fd, &release_data);
 
 	if (buf) {
