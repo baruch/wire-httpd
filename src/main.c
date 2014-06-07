@@ -24,6 +24,7 @@
 #include "libwire/test/utils.h"
 #include "gperf.h"
 
+#define INDEX_FILE_NAME "index.html"
 #define WEB_POOL_SIZE 128
 
 // DATA_BUF_SIZE is for the data to be read from the filesystem, leave a little
@@ -307,14 +308,28 @@ static int on_url(http_parser *parser, const char *at, size_t length)
 	UNUSED(parser);
 	DEBUG("URL: %.*s", (int)length, at);
 	struct web_data *d = parser->data;
+	size_t extra_len = 0;
 
-	if (length > sizeof(d->url)) {
-		xlog("Error while handling url, it's length is %u and the max length is %u", length, sizeof(d->url));
+	if (length == 0) {
+		xlog("URL length cannot be zero");
+		error_internal(d, STR_WITH_LEN("zero sized url\n"));
+		return -1;
+	}
+
+	if (at[length-1] == '/')
+		extra_len = strlen(INDEX_FILE_NAME);
+
+	if (length + extra_len > sizeof(d->url)) {
+		xlog("Error while handling url, it's length is %u and the max length is %u", length + extra_len, sizeof(d->url));
 		error_internal(d, STR_WITH_LEN("url too long\n"));
 		return -1;
 	}
 
 	memcpy(d->url, at, length);
+	if (extra_len) {
+		memcpy(d->url + length, INDEX_FILE_NAME, strlen(INDEX_FILE_NAME));
+		length += extra_len;
+	}
 	d->url[length] = 0;
 
 	return 0;
